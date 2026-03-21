@@ -1,79 +1,80 @@
+// ---------------------------------------------------------
+// 1. Interface with Clocking Block
+// ---------------------------------------------------------
 interface D_bus(input logic clk);
   logic D, rst, out;
 
-  clocking cb @(posedge clk);
-    default input #0s output #0;
+  clocking cb @(posedge clk or posedge rst);
+    default input #1 output #1;
     output D, rst;
     input out;
   endclocking
 
-  modport tb(clocking cb, input clk);
-  modport DUT_tb(input clk, rst, D, output out);
+  modport tb(clocking cb, input clk, input D, input rst);
 endinterface
 
+// ---------------------------------------------------------
+// 2. D-Flip-Flop DUT
+// ---------------------------------------------------------
+module D_ff (
+  input clk, rst, D,
+  output reg out
+);
+  always @(posedge clk) begin
+    if (rst) out <= 1'b0;
+    else     out <= D;
+  end
+endmodule
 
+// ---------------------------------------------------------
+// 3. Testbench Components
+// ---------------------------------------------------------
 module D_ff_tb;
-
   bit clk = 0;
   always #5 clk = ~clk;
 
   D_bus inf(clk);
+  D_ff dut(.clk(inf.clk), .rst(inf.rst), .D(inf.D), .out(inf.out));
 
-  // DUT
-  D_ff dut(.D(inf.D), .rst(inf.rst), .out(inf.out), .clk(inf.clk));
-
-  // Transaction
   class D_trans;
     rand bit D;
     rand bit rst;
     bit out;
   endclass
 
-  mailbox #(D_trans) mbx = new();
+  mailbox #(D_trans) mbx = new(); 
   mailbox #(D_trans) mbs = new();
 
-  // Generator
+  // Generator: Creates 200 transactions
   class D_gen;
     mailbox #(D_trans) mbx;
-
-    function new(mailbox #(D_trans) mbx);
-      this.mbx = mbx;
-    endfunction
+    function new(mailbox #(D_trans) mbx); this.mbx = mbx; endfunction
 
     task run();
       D_trans t;
-
-      // Reset phase
-      repeat(5) begin
-        t = new();
-        t.rst = 1;
-        t.D   = 0;
+      repeat(5) begin // Initial Reset
+        t = new(); t.rst = 1; t.D = 0;
         mbx.put(t);
       end
-
-      // Normal operation
-      repeat(195) begin
+      repeat(195) begin // Random Stimulus
         t = new();
-        assert(t.randomize() with { rst == 0; });
+        void'(t.randomize() with { rst == 0; });
         mbx.put(t);
       end
     endtask
   endclass
 
-
-  // Driver
+  // Driver: Drives DUT via Clocking Block
   class D_driver;
     virtual D_bus inf;
     mailbox #(D_trans) mbx;
-
     function new(virtual D_bus inf, mailbox #(D_trans) mbx);
-      this.inf = inf;
-      this.mbx = mbx;
+      this.inf = inf; this.mbx = mbx;
     endfunction
 
     task run();
       D_trans t;
-      repeat(200) begin
+      forever begin
         mbx.get(t);
         @(inf.cb);
         inf.cb.D   <= t.D;
@@ -82,89 +83,57 @@ module D_ff_tb;
     endtask
   endclass
 
-
-  // Monitor
+  // Monitor: Samples DUT (Corrected Sampling)
   class D_monitor;
     virtual D_bus inf;
     mailbox #(D_trans) mbs;
-
     function new(virtual D_bus inf, mailbox #(D_trans) mbs);
-      this.inf = inf;
-      this.mbs = mbs;
+      this.inf = inf; this.mbs = mbs;
     endfunction
 
     task run();
       D_trans t;
-      repeat(200) begin
-        @(inf.cb);
+      forever begin
+        @(inf.cb); 
         t = new();
-        t.D   = inf.cb.D;
-        t.rst = inf.cb.rst;
-        t.out = inf.cb.out;
+        // Use raw signals for inputs to avoid Questasim vsim-8441 warning
+        t.D   = inf.D;   
+        t.rst = inf.rst;
+        // Use cb for output to ensure #1 skew sampling
+        t.out = inf.cb.out; 
         mbs.put(t);
       end
     endtask
   endclass
 
-
-  // Scoreboard
+  // Scoreboard: Validates results (Corrected Logic)
   class D_scoreboard;
     mailbox #(D_trans) mbs;
-    int pass = 0;
-    int fail = 0;
+    int item_pass = 0, item_fail = 0;
+    bit expected = 0; 
 
-    function new(mailbox #(D_trans) mbs);
-      this.mbs = mbs;
-    endfunction
+    function new(mailbox #(D_trans) mbs); this.mbs = mbs; endfunction
 
     task run();
       D_trans t;
-      bit prev_D = 0;
-      bit expected;
-      int valid_cycles = 0;
-
-      repeat(200) begin
+      forever begin
         mbs.get(t);
-
-        if (t.rst) begin
-          expected = 0;
-          prev_D = 0;
-          valid_cycles = 0;
-        end
+        if (t.out === expected) item_pass++;
         else begin
-          expected = prev_D;
-          prev_D = t.D;
-          valid_cycles++;
+          item_fail++;
+          $display("[%0t] FAIL: out=%b expected=%b (D=%b, rst=%b)", 
+                   $time, t.out, expected, t.D, t.rst);
         end
-
-        // Ignore initial pipeline cycles
-        if (valid_cycles > 1) begin
-          if (t.out == expected) begin
-            $display("PASS: t=%0t D=%b out=%b expected=%b rst=%b",
-                     $time, t.D, t.out, expected, t.rst);
-            pass++;
-          end
-          else begin
-            $display("FAIL: t=%0t D=%b out=%b expected=%b rst=%b",
-                     $time, t.D, t.out, expected, t.rst);
-            fail++;
-          end
-        end
+        // Predict NEXT cycle's output based on CURRENT sampled inputs
+        expected = t.rst ? 0 : t.D;
       end
-
-      $display("=================================");
-      $display("PASS COUNT = %0d", pass);
-      $display("FAIL COUNT = %0d", fail);
-      $display("=================================");
     endtask
   endclass
 
-
-  // Instances
-  D_gen        g;
-  D_driver     d;
-  D_monitor    m;
-  D_scoreboard s;
+  // ---------------------------------------------------------
+  // 4. Main Simulation Control
+  // ---------------------------------------------------------
+  D_gen g; D_driver d; D_monitor m; D_scoreboard s;
 
   initial begin
     g = new(mbx);
@@ -177,10 +146,15 @@ module D_ff_tb;
       d.run();
       m.run();
       s.run();
-    join
+    join_any // Generator finishes first
 
-    $display("Simulation Finished");
+    // Wait until Scoreboard processes all 200 transactions
+    wait(s.item_pass + s.item_fail == 200);
+    
+    #10; 
+    $display("--- Final Results ---");
+    $display("Total Transactions: %0d", s.item_pass + s.item_fail);
+    $display("Pass: %0d, Fail: %0d", s.item_pass, s.item_fail);
     $finish;
   end
-
 endmodule
