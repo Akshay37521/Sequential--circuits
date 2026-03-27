@@ -1,39 +1,51 @@
 # SISO Shift Register Verification (SystemVerilog)
 
-## Objective
-To verify the functionality of a Serial-In Serial-Out (SISO) shift register using a structured SystemVerilog testbench.
+## Overview
+Verification of a 4-bit Serial-In Serial-Out (SISO) shift register using SystemVerilog with focus on timing correctness, synchronization, and assertion-based validation.
 
 ---
 
 ## DUT Description
-- 1-bit serial input  
-- 1-bit serial output  
-- Data shifts on each clock cycle  
+- 4-bit shift register  
+- Serial input and serial output  
+- Data shifts on each positive clock edge  
 - Synchronous reset  
 
 ---
 
-## Verification Approach
-The verification environment includes:
+## Verification Architecture
+The testbench is built using modular components:
 
-- Generator → constrained random stimulus  
-- Driver → clocking block-based signal driving  
-- Monitor → captures DUT activity  
-- Scoreboard → validates delayed output behavior  
+- **Generator** → constrained random stimulus  
+- **Driver** → drives signals using clocking block  
+- **Monitor** → samples DUT signals using separate clocking block  
+- **Scoreboard** → checks expected vs actual output  
 
 ---
 
-## Key Concepts Used
-- Program block (avoids race conditions)  
-- Clocking block (ensures proper timing)  
+## Key Techniques
+- Clocking blocks for proper timing separation (driver vs monitor)  
 - Constrained random verification  
-- Queue-based checking mechanism  
+- Scoreboard-based checking with reset handling  
+- SystemVerilog Assertions (SVA):
+  - Reset behavior
+  - Shift correctness (4-cycle delay)
+  - Stability checks  
+
+---
+
+## Timing Fix
+Initial implementation had race conditions due to improper sampling.
+
+**Fix:**
+- Separate clocking blocks for driver and monitor  
+- Proper alignment of sampling and DUT update  
 
 ---
 
 ## Simulation Setup
-- Platform: EDA Playground  
-- Simulator: Siemens QuestaSim 2020.1  
+- Platform: EDA Playground / Local Simulation  
+- Simulator: Siemens QuestaSim  
 - Language: SystemVerilog  
 
 ---
@@ -42,14 +54,8 @@ The verification environment includes:
 - Total Test Cases: 200  
 - Passed: 200  
 - Failed: 0  
+- All assertions passed  
 
 ---
 
-## Detailed Report
-For complete details including waveform analysis and screenshots, refer to:
-
-👉 `report.pdf`
-
----
-
-## Folder Structure
+## Project Structure
